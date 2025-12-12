@@ -1,0 +1,31 @@
+name: Test WITHOUT --network=host (expect FAIL)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    name: Build without --network=host
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install podman-static
+        run: |
+          echo "=== Installing podman-static ==="
+          curl -fsSL -o /tmp/podman.tar.gz \
+            https://github.com/mgoltzsche/podman-static/releases/latest/download/podman-linux-amd64.tar.gz
+          cd /tmp && tar -xzf podman.tar.gz
+          sudo cp -f podman-linux-amd64/usr/local/bin/* /usr/bin/
+          podman system migrate
+          podman --version
+
+      - name: Build WITHOUT --network=host (expect SSL error)
+        run: |
+          echo "=== Building without --network=host ==="
+          echo "This is expected to FAIL with UNKNOWN_CERTIFICATE_VERIFICATION_ERROR"
+          podman build --format docker -f Containerfile .

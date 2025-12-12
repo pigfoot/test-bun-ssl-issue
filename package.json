@@ -1,0 +1,8 @@
+{
+  "name": "test-bun-podman-ssl",
+  "version": "1.0.0",
+  "description": "Minimal test case for GitHub Actions ubuntu-24.04 runner Bun+Podman SSL issue",
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}
