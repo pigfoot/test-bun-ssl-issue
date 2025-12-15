@@ -14,14 +14,47 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install podman-static
+      - name: Diagnose rootless environment
         run: |
-          echo "=== Installing podman-static ==="
-          curl -fsSL -o /tmp/podman.tar.gz \
-            https://github.com/mgoltzsche/podman-static/releases/latest/download/podman-linux-amd64.tar.gz
-          cd /tmp && tar -xzf podman.tar.gz
-          sudo cp -f podman-linux-amd64/usr/local/bin/* /usr/bin/
-          podman system migrate
+          echo "=== Current User ==="
+          whoami
+          id
+
+          echo "=== Check existing subuid/subgid ==="
+          cat /etc/subuid || echo "No subuid file"
+          cat /etc/subgid || echo "No subgid file"
+
+          echo "=== Check user namespaces support ==="
+          cat /proc/sys/kernel/unprivileged_userns_clone || echo "unprivileged_userns_clone not available"
+          cat /proc/sys/user/max_user_namespaces || echo "max_user_namespaces not available"
+
+          echo "=== Test user namespace creation ==="
+          unshare --user --map-root-user echo "User namespace works" || echo "User namespace failed"
+
+          echo "=== Setup subuid/subgid if missing ==="
+          USER=$(whoami)
+          grep -q "^${USER}:" /etc/subuid || echo "${USER}:100000:65536" | sudo tee -a /etc/subuid
+          grep -q "^${USER}:" /etc/subgid || echo "${USER}:100000:65536" | sudo tee -a /etc/subgid
+
+          echo "=== Final subuid/subgid ==="
+          cat /etc/subuid
+          cat /etc/subgid
+
+      - name: Install podman from rootless-static-toolkits
+        run: |
+          echo "=== Installing podman from rootless-static-toolkits ==="
+          REPO="pigfoot/rootless-static-toolkits"
+          ARCH=$([[ $(uname -m) == "aarch64" ]] && echo "arm64" || echo "amd64")
+          TOOL="podman"
+          TAG=$(curl -s "https://api.github.com/repos/${REPO}/releases" | \
+            sed -n 's/.*"tag_name": "\('"${TOOL}"'-v[^"]*\)".*/\1/p' | head -1)
+          mkdir -p $HOME/podman-install
+          cd $HOME/podman-install
+          curl -fsSL "https://github.com/${REPO}/releases/download/${TAG}/${TOOL}-full-linux-${ARCH}.tar.zst" | \
+            zstd -d | tar xvf -
+          cd ${TAG}
+          sudo cp -a usr/* /usr/
+          sudo cp -a etc/* /etc/
           podman --version
 
       - name: Build WITHOUT --network=host (expect SSL error)
