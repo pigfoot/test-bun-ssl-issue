@@ -1,0 +1,288 @@
+name: Podman IPv6 Matrix Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    name: "${{ matrix.podman }} / ${{ matrix.network }}"
+    runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.network == 'default' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        podman:
+          - ubuntu
+          - mgoltzsche
+          - pigfoot-static
+          - pigfoot-static-standalone
+          - pigfoot-glibc
+          - pigfoot-glibc-standalone
+        network:
+          - default
+          - host
+          - ipv4-only
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup rootless environment
+        run: |
+          echo "=== Setup subuid/subgid ==="
+          USER=$(whoami)
+          grep -q "^${USER}:" /etc/subuid || echo "${USER}:100000:65536" | sudo tee -a /etc/subuid
+          grep -q "^${USER}:" /etc/subgid || echo "${USER}:100000:65536" | sudo tee -a /etc/subgid
+          cat /etc/subuid
+          cat /etc/subgid
+
+      # ===== Install Podman based on matrix.podman =====
+
+      - name: Install podman (ubuntu)
+        if: matrix.podman == 'ubuntu'
+        run: |
+          echo "=== Installing Ubuntu official podman ==="
+          sudo apt-get update
+          sudo apt-get install -y podman
+          podman --version
+          echo "PODMAN_SOURCE=Ubuntu apt" >> $GITHUB_ENV
+
+      - name: Install podman (mgoltzsche)
+        if: matrix.podman == 'mgoltzsche'
+        run: |
+          echo "=== Installing mgoltzsche/podman-static ==="
+          curl -fsSL -o /tmp/podman.tar.gz \
+            https://github.com/mgoltzsche/podman-static/releases/latest/download/podman-linux-amd64.tar.gz
+          cd /tmp && tar -xzf podman.tar.gz
+          sudo cp -f podman-linux-amd64/usr/local/bin/* /usr/bin/
+          sudo mkdir -p /etc/containers
+          sudo cp -n podman-linux-amd64/etc/containers/* /etc/containers/ 2>/dev/null || true
+          podman --version
+          echo "PODMAN_SOURCE=mgoltzsche/podman-static" >> $GITHUB_ENV
+
+      - name: Install podman (pigfoot-static)
+        if: matrix.podman == 'pigfoot-static'
+        run: |
+          echo "=== Installing pigfoot/static-rootless-container-tools (static) ==="
+          REPO="pigfoot/static-rootless-container-tools"
+          TOOL="podman"
+
+          # Get latest release tag for podman
+          TAG=$(curl -s "https://api.github.com/repos/${REPO}/releases" | \
+            jq -r '[.[] | select(.tag_name | startswith("podman-"))][0].tag_name')
+          echo "Latest tag: ${TAG}"
+
+          # Download static variant
+          ASSET="${TOOL}-${TAG#podman-}-linux-amd64-static.tar.zst"
+          echo "Downloading: ${ASSET}"
+
+          mkdir -p /tmp/podman-install
+          cd /tmp/podman-install
+          curl -fsSL "https://github.com/${REPO}/releases/download/${TAG}/${ASSET}" | \
+            zstd -d | tar xvf -
+
+          # Install - copy binaries to /usr/bin to override system podman
+          cd ${TOOL}-${TAG#podman-}
+          sudo cp -f usr/local/bin/* /usr/bin/
+          sudo cp -a usr/local/lib/* /usr/lib/ 2>/dev/null || true
+          sudo cp -a usr/local/libexec/* /usr/libexec/ 2>/dev/null || true
+          sudo mkdir -p /etc/containers
+          sudo cp -a etc/containers/* /etc/containers/ 2>/dev/null || true
+          podman --version
+          echo "PODMAN_SOURCE=pigfoot/static-rootless-container-tools (static/musl+mimalloc)" >> $GITHUB_ENV
+
+      - name: Install podman (pigfoot-static-standalone)
+        if: matrix.podman == 'pigfoot-static-standalone'
+        run: |
+          echo "=== Installing pigfoot/static-rootless-container-tools (static-standalone) ==="
+          REPO="pigfoot/static-rootless-container-tools"
+          TOOL="podman"
+
+          # Get latest release tag for podman
+          TAG=$(curl -s "https://api.github.com/repos/${REPO}/releases" | \
+            jq -r '[.[] | select(.tag_name | startswith("podman-"))][0].tag_name')
+          echo "Latest tag: ${TAG}"
+
+          # Download static-standalone variant
+          ASSET="${TOOL}-${TAG#podman-}-linux-amd64-static-standalone.tar.zst"
+          echo "Downloading: ${ASSET}"
+
+          mkdir -p /tmp/podman-install
+          cd /tmp/podman-install
+          curl -fsSL "https://github.com/${REPO}/releases/download/${TAG}/${ASSET}" | \
+            zstd -d | tar xvf -
+
+          # Standalone only has single binary: podman-v5.7.1/podman
+          cd ${TOOL}-${TAG#podman-}
+          sudo cp -f podman /usr/bin/
+          podman --version
+          echo "PODMAN_SOURCE=pigfoot/static-rootless-container-tools (static-standalone/musl+mimalloc)" >> $GITHUB_ENV
+
+      - name: Install podman (pigfoot-glibc)
+        if: matrix.podman == 'pigfoot-glibc'
+        run: |
+          echo "=== Installing pigfoot/static-rootless-container-tools (glibc) ==="
+          REPO="pigfoot/static-rootless-container-tools"
+          TOOL="podman"
+
+          # Get latest release tag for podman
+          TAG=$(curl -s "https://api.github.com/repos/${REPO}/releases" | \
+            jq -r '[.[] | select(.tag_name | startswith("podman-"))][0].tag_name')
+          echo "Latest tag: ${TAG}"
+
+          # Download glibc variant
+          ASSET="${TOOL}-${TAG#podman-}-linux-amd64-glibc.tar.zst"
+          echo "Downloading: ${ASSET}"
+
+          mkdir -p /tmp/podman-install
+          cd /tmp/podman-install
+          curl -fsSL "https://github.com/${REPO}/releases/download/${TAG}/${ASSET}" | \
+            zstd -d | tar xvf -
+
+          # Install - copy binaries to /usr/bin to override system podman
+          cd ${TOOL}-${TAG#podman-}
+          sudo cp -f usr/local/bin/* /usr/bin/
+          sudo cp -a usr/local/lib/* /usr/lib/ 2>/dev/null || true
+          sudo cp -a usr/local/libexec/* /usr/libexec/ 2>/dev/null || true
+          sudo mkdir -p /etc/containers
+          sudo cp -a etc/containers/* /etc/containers/ 2>/dev/null || true
+          podman --version
+          echo "PODMAN_SOURCE=pigfoot/static-rootless-container-tools (glibc+mimalloc)" >> $GITHUB_ENV
+
+      - name: Install podman (pigfoot-glibc-standalone)
+        if: matrix.podman == 'pigfoot-glibc-standalone'
+        run: |
+          echo "=== Installing pigfoot/static-rootless-container-tools (glibc-standalone) ==="
+          REPO="pigfoot/static-rootless-container-tools"
+          TOOL="podman"
+
+          # Get latest release tag for podman
+          TAG=$(curl -s "https://api.github.com/repos/${REPO}/releases" | \
+            jq -r '[.[] | select(.tag_name | startswith("podman-"))][0].tag_name')
+          echo "Latest tag: ${TAG}"
+
+          # Download glibc-standalone variant
+          ASSET="${TOOL}-${TAG#podman-}-linux-amd64-glibc-standalone.tar.zst"
+          echo "Downloading: ${ASSET}"
+
+          mkdir -p /tmp/podman-install
+          cd /tmp/podman-install
+          curl -fsSL "https://github.com/${REPO}/releases/download/${TAG}/${ASSET}" | \
+            zstd -d | tar xvf -
+
+          # Standalone only has single binary: podman-v5.7.1/podman
+          cd ${TOOL}-${TAG#podman-}
+          sudo cp -f podman /usr/bin/
+          podman --version
+          echo "PODMAN_SOURCE=pigfoot/static-rootless-container-tools (glibc-standalone+mimalloc)" >> $GITHUB_ENV
+
+      # ===== Show podman info =====
+
+      - name: Show podman info
+        run: |
+          echo "=== Podman Source: ${{ env.PODMAN_SOURCE }} ==="
+          echo "=== Podman Version ==="
+          podman version
+          echo ""
+          echo "=== Binary Info ==="
+          which podman
+          file $(which podman)
+          ldd $(which podman) 2>&1 || echo "(static binary)"
+
+      # ===== Build with network mode =====
+
+      - name: Build container (network=${{ matrix.network }})
+        id: build
+        run: |
+          echo "=== Build Configuration ==="
+          echo "Podman: ${{ matrix.podman }}"
+          echo "Network: ${{ matrix.network }}"
+          echo ""
+
+          # Set network flag based on matrix
+          case "${{ matrix.network }}" in
+            default)
+              NETWORK_FLAG=""
+              echo "Using default network (pasta)"
+              echo "EXPECTED: FAIL (IPv6 routing issue)"
+              ;;
+            host)
+              NETWORK_FLAG="--network=host"
+              echo "Using --network=host"
+              echo "EXPECTED: SUCCESS (bypasses pasta)"
+              ;;
+            ipv4-only)
+              NETWORK_FLAG="--network=pasta:-4"
+              echo "Using --network=pasta:-4 (IPv4 only)"
+              echo "EXPECTED: SUCCESS (avoids IPv6)"
+              ;;
+          esac
+
+          echo ""
+          echo "=== Starting Build ==="
+
+          if podman build ${NETWORK_FLAG} --format docker -f Containerfile . ; then
+            echo "BUILD_RESULT=success" >> $GITHUB_OUTPUT
+            echo ""
+            echo "=== BUILD SUCCEEDED ==="
+          else
+            echo "BUILD_RESULT=failure" >> $GITHUB_OUTPUT
+            echo ""
+            echo "=== BUILD FAILED ==="
+            exit 1
+          fi
+
+      # ===== Summary =====
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "## Test Result Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Podman Source** | ${{ matrix.podman }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Network Mode** | ${{ matrix.network }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build Result** | ${{ steps.build.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ matrix.network }}" == "default" ]]; then
+            echo "> **Note**: \`default\` network mode is expected to fail due to pasta IPv6 routing issues." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ===== Summary Job =====
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-24.04
+    needs: test
+    if: always()
+
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "# Podman IPv6 Matrix Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Expected Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Network Mode | Expected | Reason |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------------|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`default\` | FAIL | pasta IPv6 routing bug |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`host\` | SUCCESS | bypasses pasta |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ipv4-only\` | SUCCESS | avoids IPv6 |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Key Findings" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- If ALL podman sources fail with \`default\` network: **Confirms pasta IPv6 bug**" >> $GITHUB_STEP_SUMMARY
+          echo "- If ALL podman sources succeed with \`host\` network: **Confirms workaround works**" >> $GITHUB_STEP_SUMMARY
+          echo "- If static vs ubuntu results differ: **May indicate libc-specific issues**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## References" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- [pasta IPv6 route failures (podman#22824)](https://github.com/containers/podman/issues/22824)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Research Report](https://github.com/pigfoot/static-rootless-container-tools)" >> $GITHUB_STEP_SUMMARY
